@@ -114,7 +114,7 @@ int main()
 		{	
 		
 			int r = random()%15;
-			printf("\nlogical_address: %d\n", r);
+			//printf("\nlogical_address: %d\n", r);
 			/* event_arrive(event_type, logical_address, size, start_time) */
 			result = ssd -> event_arrive(WRITE, number, 1, (double) 1800+(300*i));
 			//printf("Write time: %.20lf\n", result);
