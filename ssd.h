@@ -686,6 +686,7 @@ public:
 	// Used to update GC on used pages in blocks.
 	void update_block(Block * b);
 
+
 	// Singleton
 	static Block_manager *instance();
 	static void instance_initialize(FtlParent *ftl);
@@ -694,7 +695,7 @@ public:
 	void cost_insert(Block *b);
 
 	void print_cost_status();
-
+	int block_erase[16];
 
 
 private:
@@ -741,6 +742,7 @@ private:
 
 	// Counter for handling periodic sort of active_list
 	uint num_insert_events;
+	
 
 	uint current_writing_block;
 

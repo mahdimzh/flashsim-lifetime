@@ -23,10 +23,13 @@
  * driver to create and run a very basic test of writes then reads */
 
 #include "ssd.h"
+#include <time.h>
+#include <stdlib.h>
+
 
 #define SIZE 130
 
-using namespace ssd;
+using namespace ssd; 
 
 int main()
 {
@@ -110,15 +113,15 @@ int main()
 		if(number == -1)
 			break;
 		int  i = 0;
-		//for (i = 0; i < number; i++)
+		for (i = 0; i < number; i++)
 		{	
-		
-			int r = random()%15;
+			srand(time(NULL));
+			int r = rand()%(PLANE_SIZE * BLOCK_SIZE);
 			//printf("\nlogical_address: %d\n", r);
 			/* event_arrive(event_type, logical_address, size, start_time) */
-			result = ssd -> event_arrive(WRITE, number, 1, (double) 1800+(300*i));
+			result = ssd -> event_arrive(WRITE, r, 1, (double) 1800+(300*i));
 			//printf("Write time: %.20lf\n", result);
-			i++;
+			//i++;
 		}
 	
 	//result = ssd -> event_arrive(WRITE, 1, 1, (double) 1800+(300*62));

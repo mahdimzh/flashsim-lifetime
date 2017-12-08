@@ -82,7 +82,7 @@ enum status FtlImpl_Dftl::write(Event &event)
 
 	// Important order. As get_free_data_page might change current.
 	long free_page = get_free_data_page(event);
-
+	//printf("after get free page\n");
 	MPage current = trans_map[dlpn];
 
 	Address a = Address(current.ppn, PAGE);
@@ -136,12 +136,15 @@ void FtlImpl_Dftl::cleanup_block(Event &event, Block *block)
 	 */
 	for (uint i=0;i<BLOCK_SIZE;i++)
 	{
-		assert(block->get_state(i) != EMPTY);
+		//assert(block->get_state(i) != EMPTY);
+		if(block->get_state(i) == EMPTY)
+			continue;
 		// When valid, two events are create, one for read and one for write. They are chained and the controller are
 		// called to execute them. The execution time is then added to the real event.
 		if (block->get_state(i) == VALID)
 		{
 			// Set up events.
+			//printf("in cleanup_block: %d\n", block->get_physical_address()+i);
 			Event readEvent = Event(READ, event.get_logical_address(), 1, event.get_start_time());
 			readEvent.set_address(Address(block->get_physical_address()+i, PAGE));
 

@@ -40,6 +40,11 @@ Block_manager::Block_manager(FtlParent *ftl) : ftl(ftl)
 
 	data_active = 0;
 	log_active = 0;
+	for (int i = 0; i < SSD_SIZE*DIE_SIZE*PLANE_SIZE; ++i)
+	{
+		 block_erase[i] = 0;
+	}
+	
 
 	current_writing_block = -2;
 
@@ -173,26 +178,92 @@ void Block_manager::insert_events(Event &event)
 	float used = (int)invalid_list.size() + (int)log_active + (int)data_active - (int)free_list.size();
 	float total = NUMBER_OF_ADDRESSABLE_BLOCKS;
 	float ratio = used/total;
+	float ratio1 = (total-((max_blocks - (simpleCurrentFree/BLOCK_SIZE)) + free_list.size())) / total;
+
+	float sum = 0;
+	float min = block_erase[0];
+	float Max = block_erase[0];
+
+	for (int i = 0; i < PLANE_SIZE; ++i)
+	{
+		//printf("%d  -  ", block_erase[i]);
+		sum += block_erase[i];
+		if (block_erase[i] > Max)
+			Max = block_erase[i];
+		if (block_erase[i] < min)
+			min = block_erase[i];
+		
+	}
+	float Av = (Max - min) / 2;
+	float average = sum / PLANE_SIZE;
+	float UpperB = average + Av;
+	float LowerB = average - Av;
+	printf("UpperB %f LowerB %f\n", UpperB, LowerB);
+
+
 	printf("\n\n***\n\ninvalid_list: %li, log_active: %li, full block: %li, free_list: %li\n", (int)invalid_list.size(), (int)log_active, (int)data_active, (int)free_list.size());
-	printf("used: %f, total: %f, ratio: %f\n****\n", used, total, ratio);
+	printf("used: %f, total: %f, ratio: %f ratio1: %f\n****\n", used, total, ratio, ratio1);
 	
 	int free_blocks = (max_blocks - (simpleCurrentFree/BLOCK_SIZE)) + free_list.size();
 	float check = (float) free_blocks / NUMBER_OF_ADDRESSABLE_BLOCKS;
-	uint num_to_erase = 5; 
+	uint num_to_erase = PLANE_SIZE * 0.5; 
 
-	if(ratio >= 0.75) {
+	ActiveByCost::iterator it = active_cost.get<1>().end();
+	//printf(" before while: %ln\n", (*it)->physical_address);
+	--it;
+
+	
+	while ((*it) && num_to_erase > 0 && (*it)->get_pages_invalid() > 0 && (*it)->get_pages_valid() == BLOCK_SIZE) {
+		//printf("ph: %li\n", (*it)->physical_address);
+		if (current_writing_block != (*it)->physical_address) {
+			
+			if(block_erase[(*it)->get_physical_address()/BLOCK_SIZE] >= UpperB) {
+				--it;
+				continue;
+			}
+		//printf("inv: %d valpge: %d crb: %d pa: %d\n",(*it)->get_pages_invalid(), (*it)->get_pages_valid(), current_writing_block, (*it)->physical_address);
+
+			//printf("erase p: %p phy: %li ratio: %i num: %i\n", (*it), (*it)->physical_address, (*it)->get_pages_invalid(), num_to_erase);
+			Block *blockErase = (*it);
+			// Let the FTL handle cleanup of the block.
+			ftl->cleanup_block(event, blockErase);
+			// Create erase event and attach to current event queue.
+			Event erase_event = Event(ERASE, event.get_logical_address(), 1, event.get_start_time());
+			erase_event.set_address(Address(blockErase->get_physical_address(), BLOCK));
+			// Execute erase
+			if (ftl->controller.issue(erase_event) == FAILURE) { assert(false);	}
+			block_erase[blockErase->get_physical_address()/BLOCK_SIZE]++;
+			free_list.push_back(blockErase);
+			event.incr_time_taken(erase_event.get_time_taken());
+			ftl->controller.stats.numFTLErase++;
+		}
+		it = active_cost.get<1>().end();
+		--it;
+		if (current_writing_block == (*it)->physical_address)
+			--it;
+
+		num_to_erase--;	
+	}
+
+	it = active_cost.get<1>().end();
+			--it; 
+
+	if(ratio1 >= 0.75) {
 		if (FTL_IMPLEMENTATION == IMPL_DFTL || FTL_IMPLEMENTATION == IMPL_BIMODAL)
 		{
 			ActiveByCost::iterator it = active_cost.get<1>().end();
-			--it;
+			--it; 
 
+			int freeBlocks = ((max_blocks - (simpleCurrentFree/BLOCK_SIZE)) + free_list.size());
+			int freePages = (freeBlocks * BLOCK_SIZE) - 1; // -1 is needed size for new write
 			//while ((*it)->get_pages_invalid() > 0 && (*it)->get_pages_valid() == BLOCK_SIZE)
-			while(((float)(*it)->get_pages_invalid()/max_blocks) >= 0.75 && (total - used) <= 1) {
+			while(freePages > 0 && ((float)(*it)->get_pages_invalid()/BLOCK_SIZE) >= 0.5 && (*it)->get_pages_valid() == BLOCK_SIZE) {
+				//printf("block %d\n", (*it)->get_physical_address());
 				if (current_writing_block != (*it)->physical_address)
 				{
 					//printf("erase p: %p phy: %li ratio: %i num: %i\n", (*it), (*it)->physical_address, (*it)->get_pages_invalid(), num_to_erase);
+					freePages = freePages - (BLOCK_SIZE - (*it)->get_pages_invalid());
 					Block *blockErase = (*it);
-
 					// Let the FTL handle cleanup of the block.
 					ftl->cleanup_block(event, blockErase);
 
@@ -202,7 +273,7 @@ void Block_manager::insert_events(Event &event)
 
 					// Execute erase
 					if (ftl->controller.issue(erase_event) == FAILURE) { assert(false);	}
-	
+					block_erase[blockErase->get_physical_address()/BLOCK_SIZE]++;
 					free_list.push_back(blockErase);
 	
 					event.incr_time_taken(erase_event.get_time_taken());
@@ -217,10 +288,77 @@ void Block_manager::insert_events(Event &event)
 			 		--it;
 
 				//num_to_erase--;
-				print_cost_status();
+				//print_cost_status();
 			}
 		}
 	}
+	
+
+	//printf("average is: %f\n", average);
+	//printf("Max %d min %d Diff %d\n",Max, min, (Max - min) );
+
+	  it = active_cost.get<1>().end();
+		--it;
+
+			//while ((*it)->get_pages_invalid() > 0 && (*it)->get_pages_valid() == BLOCK_SIZE)
+			//while(((float)(*it)->get_pages_invalid()/max_blocks) >= 0.75 && (total - used) <= 1)
+			int planeSize = PLANE_SIZE;
+			//for (uint i=0;i<SSD_SIZE*PACKAGE_SIZE*DIE_SIZE*PLANE_SIZE;i++)
+			while(*it)
+			{
+				//planeSize--;
+				//printf("c1: %d c2: %d\n", block_erase[(*it)->get_physical_address()/BLOCK_SIZE], (BLOCK_SIZE - (*it)->get_pages_valid()));
+				if (current_writing_block == (*it)->physical_address) {
+					it--;
+					continue;
+				}
+				if (current_writing_block != (*it)->physical_address)
+				{	
+					if(block_erase[(*it)->get_physical_address()/BLOCK_SIZE] >= LowerB) {
+//						it = active_cost.get<1>().end();
+						--it;
+						//if (current_writing_block == (*it)->physical_address)
+			 			//	--it;
+						continue;
+					}
+
+					if((BLOCK_SIZE - (*it)->get_pages_valid()) == BLOCK_SIZE) {
+						//it = active_cost.get<1>().end();
+							--it;
+						//if (current_writing_block == (*it)->physical_address)
+				 		//	--it;
+						continue;
+					}
+					//printf("erase p: %p phy: %li ratio: %i num: %i\n", (*it), (*it)->physical_address, (*it)->get_pages_invalid(), num_to_erase);
+					//print_cost_status();
+					Block *blockErase = (*it);
+					//exit(1);
+					//printf("******\nblock_erase: %d\n", block_erase[(*it)->get_physical_address()/BLOCK_SIZE]);
+					// Let the FTL handle cleanup of the block.
+					ftl->cleanup_block(event, blockErase);
+
+					// Create erase event and attach to current event queue.
+					Event erase_event = Event(ERASE, event.get_logical_address(), 1, event.get_start_time());
+					erase_event.set_address(Address(blockErase->get_physical_address(), BLOCK));
+
+					// Execute erase
+					if (ftl->controller.issue(erase_event) == FAILURE) { assert(false);	}
+					block_erase[blockErase->get_physical_address()/BLOCK_SIZE]++;
+					free_list.push_back(blockErase);
+	
+					event.incr_time_taken(erase_event.get_time_taken());
+
+					ftl->controller.stats.numFTLErase++;
+				}
+
+				it = active_cost.get<1>().end();
+				--it;
+
+				if (current_writing_block == (*it)->physical_address)
+			 		--it;
+
+			 	//print_cost_status();
+			 }
 
 
 	/*if(ratio >= 1.75) {
@@ -366,10 +504,10 @@ void Block_manager::print_cost_status()
 
 	ActiveByCost::iterator it = active_cost.get<1>().end();
 	--it;
-	printf("physical_address\tlast_wirte\t#empty_pages\tInvalid_pages\tValid_Pages\tErases_remaining\n");
+	printf("physical_address\tlast_wirte\t#empty_pages\tInvalid_pages\tValid_Pages\tErases_remaining - Erase #\n");
 	for (uint i=0;i<SSD_SIZE*PACKAGE_SIZE*DIE_SIZE*PLANE_SIZE;i++) //SSD_SIZE*PACKAGE_SIZE*DIE_SIZE*PLANE_SIZE
 	{
-		printf("%li\t\t\t%i\t\t%u\t\t\t%i\t\t%u\t\t%li\n", (*it)->physical_address, (*it)->get_pages_valid(), (BLOCK_SIZE - (*it)->get_pages_valid()), (*it)->get_pages_invalid(), (BLOCK_SIZE - (*it)->get_pages_invalid()), (*it)->get_erases_remaining());
+		printf("%li\t\t\t%i\t\t%u\t\t\t%i\t\t%u\t\t%li - %d\n", (*it)->physical_address, (*it)->get_pages_valid(), (BLOCK_SIZE - (*it)->get_pages_valid()), (*it)->get_pages_invalid(), (BLOCK_SIZE - (*it)->get_pages_invalid()), (*it)->get_erases_remaining(), block_erase[(*it)->get_physical_address()/BLOCK_SIZE]);
 		--it;
 	}
 
@@ -400,7 +538,7 @@ void Block_manager::print_cost_status()
 	for (uint i=0;i<10;i++) //SSD_SIZE*PACKAGE_SIZE*DIE_SIZE*PLANE_SIZE
 	{
 	//	printf("%li %i %i\n", (*it)->physical_address, (*it)->get_pages_valid(), (*it)->get_pages_invalid());
-		--it;
+	//	--it;
 	}
 }
 
