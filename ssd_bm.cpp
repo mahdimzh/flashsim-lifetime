@@ -40,7 +40,8 @@ Block_manager::Block_manager(FtlParent *ftl) : ftl(ftl)
 
 	data_active = 0;
 	log_active = 0;
-	for (int i = 0; i < SSD_SIZE*DIE_SIZE*PLANE_SIZE; ++i)
+	// printf("%d\n", SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE * BLOCK_SIZE);
+	for (int i = 0; i < SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE; ++i)
 	{
 		 block_erase[i] = 0;
 	}
@@ -184,7 +185,7 @@ void Block_manager::insert_events(Event &event)
 	float min = block_erase[0];
 	float Max = block_erase[0];
 
-	for (int i = 0; i < PLANE_SIZE; ++i)
+	for (int i = 0; i < SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE; ++i)
 	{
 		//printf("%d  -  ", block_erase[i]);
 		sum += block_erase[i];
@@ -193,37 +194,63 @@ void Block_manager::insert_events(Event &event)
 		if (block_erase[i] < min)
 			min = block_erase[i];
 		
-	}
-	float Av = (Max - min) / 2;
-	float average = sum / PLANE_SIZE;
-	float UpperB = average + Av;
-	float LowerB = average - Av;
-	printf("UpperB %f LowerB %f\n", UpperB, LowerB);
+	} 
+	float partialAverage 			= (Max + min) / 2;
+	float partialSubtractAverage 	= (Max - min) / 2;
+	float totalAverage = sum / (SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE);
+	float UpperB = totalAverage + partialSubtractAverage;
+	float LowerB = totalAverage - partialSubtractAverage;
+	float criticalLowerB = (totalAverage - partialAverage) > 0 ? (totalAverage - partialAverage) : 0;
+	printf("\n\npartialAverage: %f partialSubtractAverage: %f (Max: %f - min: %f)totalAverage %f\n", partialAverage,partialSubtractAverage, Max, min, totalAverage);
+	printf("UpperB %f LowerB %f, criticalLowerB %f", UpperB, LowerB, criticalLowerB);
 
 
-	printf("\n\n***\n\ninvalid_list: %li, log_active: %li, full block: %li, free_list: %li\n", (int)invalid_list.size(), (int)log_active, (int)data_active, (int)free_list.size());
-	printf("used: %f, total: %f, ratio: %f ratio1: %f\n****\n", used, total, ratio, ratio1);
+	printf("\ninvalid_list: %li, log_active: %li, full block: %li, free_list: %li\n", (int)invalid_list.size(), (int)log_active, (int)data_active, (int)free_list.size());
+	printf("used: %f, total: %f, ratio: %f ratio1: %f\n", used, total, ratio, ratio1);
 	
 	int free_blocks = (max_blocks - (simpleCurrentFree/BLOCK_SIZE)) + free_list.size();
 	float check = (float) free_blocks / NUMBER_OF_ADDRESSABLE_BLOCKS;
 	uint num_to_erase = PLANE_SIZE * 0.5; 
+	int counter = PLANE_SIZE; 
 
 	ActiveByCost::iterator it = active_cost.get<1>().end();
-	//printf(" before while: %ln\n", (*it)->physical_address);
 	--it;
 
-	
-	while ((*it) && num_to_erase > 0 && (*it)->get_pages_invalid() > 0 && (*it)->get_pages_valid() == BLOCK_SIZE) {
-		//printf("ph: %li\n", (*it)->physical_address);
+	bool erase = false;
+	while (*it) {
+		erase = false;
+		//printf("%d - %d - %d - %d - %d\n", current_writing_block, (*it)->physical_address, (*it)->get_pages_invalid(), (*it)->get_pages_valid(), block_erase[(*it)->get_physical_address()/BLOCK_SIZE]);
 		if (current_writing_block != (*it)->physical_address) {
 			
-			if(block_erase[(*it)->get_physical_address()/BLOCK_SIZE] >= UpperB) {
-				--it;
-				continue;
-			}
-		//printf("inv: %d valpge: %d crb: %d pa: %d\n",(*it)->get_pages_invalid(), (*it)->get_pages_valid(), current_writing_block, (*it)->physical_address);
+			if(num_to_erase > 0 && (*it)->get_pages_invalid() == BLOCK_SIZE && (*it)->get_pages_valid() == BLOCK_SIZE && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] <= UpperB /* && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] >= LowerB*/) {
+				//All pages is invalid and  block_erase < UpperB 
+				erase = true;
+				num_to_erase--;
+			} else if((*it)->get_pages_valid() > 0 && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] < LowerB && ((float)(*it)->get_pages_invalid()/BLOCK_SIZE) > 0.5) {
+				// block_erase < LowerB && block not empty &&invalid > 50%
+				erase = true;
+				num_to_erase--;
+			} else if(block_erase[(*it)->get_physical_address()/BLOCK_SIZE] <= criticalLowerB) {
+				// block_erase < LowerB && block not empty
+				erase = true;
+				num_to_erase--;
+				
+			} else if(ratio1 >= 0.75) { //full blocks > 75%
+				
+				float partialRatio = (-1.7 * ratio1) + 2;
 
-			//printf("erase p: %p phy: %li ratio: %i num: %i\n", (*it), (*it)->physical_address, (*it)->get_pages_invalid(), num_to_erase);
+				float freeBlocks = total - (ratio1 * total);
+				printf("ratio1: %f partialRatio: %f freeBlocks: %f\n",ratio1, partialRatio,freeBlocks);
+				int freePages = (freeBlocks * BLOCK_SIZE) - 1;
+				if(freePages > 0 && ((float)(*it)->get_pages_invalid()/BLOCK_SIZE) >= partialRatio && (*it)->get_pages_valid() == BLOCK_SIZE) {
+					//free pages of block >= partialRatio && and block is full
+					erase = true;
+					num_to_erase--;
+				}
+
+			}
+		}
+		if(erase) {
 			Block *blockErase = (*it);
 			// Let the FTL handle cleanup of the block.
 			ftl->cleanup_block(event, blockErase);
@@ -236,221 +263,15 @@ void Block_manager::insert_events(Event &event)
 			free_list.push_back(blockErase);
 			event.incr_time_taken(erase_event.get_time_taken());
 			ftl->controller.stats.numFTLErase++;
-		}
-		it = active_cost.get<1>().end();
-		--it;
-		if (current_writing_block == (*it)->physical_address)
+
+			it = active_cost.get<1>().end();
 			--it;
-
-		num_to_erase--;	
-	}
-
-	it = active_cost.get<1>().end();
-			--it; 
-
-	if(ratio1 >= 0.75) {
-		if (FTL_IMPLEMENTATION == IMPL_DFTL || FTL_IMPLEMENTATION == IMPL_BIMODAL)
-		{
-			ActiveByCost::iterator it = active_cost.get<1>().end();
-			--it; 
-
-			int freeBlocks = ((max_blocks - (simpleCurrentFree/BLOCK_SIZE)) + free_list.size());
-			int freePages = (freeBlocks * BLOCK_SIZE) - 1; // -1 is needed size for new write
-			//while ((*it)->get_pages_invalid() > 0 && (*it)->get_pages_valid() == BLOCK_SIZE)
-			while(freePages > 0 && ((float)(*it)->get_pages_invalid()/BLOCK_SIZE) >= 0.5 && (*it)->get_pages_valid() == BLOCK_SIZE) {
-				//printf("block %d\n", (*it)->get_physical_address());
-				if (current_writing_block != (*it)->physical_address)
-				{
-					//printf("erase p: %p phy: %li ratio: %i num: %i\n", (*it), (*it)->physical_address, (*it)->get_pages_invalid(), num_to_erase);
-					freePages = freePages - (BLOCK_SIZE - (*it)->get_pages_invalid());
-					Block *blockErase = (*it);
-					// Let the FTL handle cleanup of the block.
-					ftl->cleanup_block(event, blockErase);
-
-					// Create erase event and attach to current event queue.
-					Event erase_event = Event(ERASE, event.get_logical_address(), 1, event.get_start_time());
-					erase_event.set_address(Address(blockErase->get_physical_address(), BLOCK));
-
-					// Execute erase
-					if (ftl->controller.issue(erase_event) == FAILURE) { assert(false);	}
-					block_erase[blockErase->get_physical_address()/BLOCK_SIZE]++;
-					free_list.push_back(blockErase);
-	
-					event.incr_time_taken(erase_event.get_time_taken());
-
-					ftl->controller.stats.numFTLErase++;
-				}
-
-				it = active_cost.get<1>().end();
-				--it;
-
-				if (current_writing_block == (*it)->physical_address)
-			 		--it;
-
-				//num_to_erase--;
-				//print_cost_status();
-			}
-		}
-	}
-	
-
-	//printf("average is: %f\n", average);
-	//printf("Max %d min %d Diff %d\n",Max, min, (Max - min) );
-
-	  it = active_cost.get<1>().end();
-		--it;
-
-			//while ((*it)->get_pages_invalid() > 0 && (*it)->get_pages_valid() == BLOCK_SIZE)
-			//while(((float)(*it)->get_pages_invalid()/max_blocks) >= 0.75 && (total - used) <= 1)
-			int planeSize = PLANE_SIZE;
-			//for (uint i=0;i<SSD_SIZE*PACKAGE_SIZE*DIE_SIZE*PLANE_SIZE;i++)
-			while(*it)
-			{
-				//planeSize--;
-				//printf("c1: %d c2: %d\n", block_erase[(*it)->get_physical_address()/BLOCK_SIZE], (BLOCK_SIZE - (*it)->get_pages_valid()));
-				if (current_writing_block == (*it)->physical_address) {
-					it--;
-					continue;
-				}
-				if (current_writing_block != (*it)->physical_address)
-				{	
-					if(block_erase[(*it)->get_physical_address()/BLOCK_SIZE] >= LowerB) {
-//						it = active_cost.get<1>().end();
-						--it;
-						//if (current_writing_block == (*it)->physical_address)
-			 			//	--it;
-						continue;
-					}
-
-					if((BLOCK_SIZE - (*it)->get_pages_valid()) == BLOCK_SIZE) {
-						//it = active_cost.get<1>().end();
-							--it;
-						//if (current_writing_block == (*it)->physical_address)
-				 		//	--it;
-						continue;
-					}
-					//printf("erase p: %p phy: %li ratio: %i num: %i\n", (*it), (*it)->physical_address, (*it)->get_pages_invalid(), num_to_erase);
-					//print_cost_status();
-					Block *blockErase = (*it);
-					//exit(1);
-					//printf("******\nblock_erase: %d\n", block_erase[(*it)->get_physical_address()/BLOCK_SIZE]);
-					// Let the FTL handle cleanup of the block.
-					ftl->cleanup_block(event, blockErase);
-
-					// Create erase event and attach to current event queue.
-					Event erase_event = Event(ERASE, event.get_logical_address(), 1, event.get_start_time());
-					erase_event.set_address(Address(blockErase->get_physical_address(), BLOCK));
-
-					// Execute erase
-					if (ftl->controller.issue(erase_event) == FAILURE) { assert(false);	}
-					block_erase[blockErase->get_physical_address()/BLOCK_SIZE]++;
-					free_list.push_back(blockErase);
-	
-					event.incr_time_taken(erase_event.get_time_taken());
-
-					ftl->controller.stats.numFTLErase++;
-				}
-
-				it = active_cost.get<1>().end();
-				--it;
-
-				if (current_writing_block == (*it)->physical_address)
-			 		--it;
-
-			 	//print_cost_status();
-			 }
-
-
-	/*if(ratio >= 1.75) {
-		//printf("ration: %f\n", (float)(*it)->get_pages_invalid()/max_blocks);
-		//printf("%f\n", (total - used));
-		while(((float)(*it)->get_pages_invalid()/max_blocks) >= 0.75 && (total - used) <= 1){
-			if (current_writing_block != (*it)->physical_address){
-			Block *blockErase = (*it);
-			for (uint i = 0; i < BLOCK_SIZE; i++) {
-				if ((*it)->get_state(i) == VALID) {//move valid pages
-					
-					//block address: (*it)->get_physical_address() page adresss: i
-					printf("page readed: %li\n", (*it)->get_physical_address() + i);
-					Event readEvent = Event(READ, event.get_logical_address(), 1, event.get_start_time()); 
-					readEvent.set_address(Address((*it)->get_physical_address() + i, PAGE));
-					if (ftl->controller.issue(readEvent) == FAILURE) printf("Data block copy failed.");
-					//copied
-
-					// Get new address to write to and invalidate previous
-					long free_page = get_free_block(DATA, event).get_linear_address();
-					printf("page to copy: %d\n", free_page);
-					Event writeEvent = Event(WRITE, (*it)->get_physical_address()+i, 1, event.get_start_time()+readEvent.get_time_taken());
-					//Address dataBlockAddress = Address(free_page, PAGE);
-					//writeEvent.set_address(dataBlockAddress);
-					//writeEvent.set_replace_address(Address((*it)->get_physical_address()+i, PAGE));
-					//writeEvent.set_payload((char*)page_data + ((*it)->get_physical_address()+i) * PAGE_SIZE);
-					//print_cost_status();
-					//Controller::instance()->event_arrive(*writeEvent);
-					if (ftl->controller.event_arrive(writeEvent) == FAILURE) printf("Data block copy failed.");
-					//pasted
-					//long dataPpn = dataBlockAddress.get_linear_address();
-					//invalidated_translation[reverse_trans_map[(*it)->get_physical_address()+i]] = dataPpn;
-					Event erase_event = Event(ERASE, event.get_logical_address(), 1, event.get_start_time() + writeEvent.get_start_time()+readEvent.get_time_taken());
-					erase_event.set_address(Address((*it)->get_physical_address(), BLOCK));
-					if (ftl->controller.issue(erase_event) == FAILURE) {	assert(false);}// Execute erase
-					event.incr_time_taken(erase_event.get_time_taken());
-					ftl->controller.stats.numFTLErase++;
-					free_list.push_back(blockErase);
-					//cleaned
-				}
-			}
-		} 
-			//it = active_cost.get<1>().end();
-			--it;
-
 			if (current_writing_block == (*it)->physical_address)
 				--it;
-			//ftl->controller.print_ftl_cost_status();
-			print_cost_status();
-
-		}
-		
-		//exit(1);
-	}*/
-
-	/*if(check < 0.75) {
-		printf("%f\n", check);
-		Event erase_event = Event(ERASE, event.get_logical_address(), 1, event.get_start_time());
-		erase_event.set_address(Address(invalid_list.back()->get_physical_address(), BLOCK));
-		if (ftl->controller.issue(erase_event) == FAILURE) {	assert(false);}// Execute erase
-		event.incr_time_taken(erase_event.get_time_taken());
-
-		free_list.push_back(invalid_list.back());
-		return;
-	}*/
-
-
-	/*if (ratio < 1.90) // Magic number
-		return;
-
-	 // More Magic! #of block to erase
-
-	//printf("%i %i %i\n", invalid_list.size(), log_active, data_active);
-
-	// First step and least expensive is to go though invalid list. (Only used by FAST)
-	while (num_to_erase != 0 && invalid_list.size() != 0)
-	{
-		Event erase_event = Event(ERASE, event.get_logical_address(), 1, event.get_start_time());
-		erase_event.set_address(Address(invalid_list.back()->get_physical_address(), BLOCK));
-		if (ftl->controller.issue(erase_event) == FAILURE) {	assert(false);}// Execute erase
-		event.incr_time_taken(erase_event.get_time_taken());
-
-		free_list.push_back(invalid_list.back());
-		invalid_list.pop_back();
-
-		num_to_erase--;
-		ftl->controller.stats.numFTLErase++;
+		} else {
+			--it;
+		}		
 	}
-
-	num_insert_events++;*/
-
-	
 }
 
 Address Block_manager::get_free_block(block_type type, Event &event)
@@ -535,7 +356,7 @@ void Block_manager::print_cost_status()
 	*/
 	
 
-	for (uint i=0;i<10;i++) //SSD_SIZE*PACKAGE_SIZE*DIE_SIZE*PLANE_SIZE
+	//for (uint i=0;i<10;i++) //SSD_SIZE*PACKAGE_SIZE*DIE_SIZE*PLANE_SIZE
 	{
 	//	printf("%li %i %i\n", (*it)->physical_address, (*it)->get_pages_valid(), (*it)->get_pages_invalid());
 	//	--it;

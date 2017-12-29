@@ -695,7 +695,7 @@ public:
 	void cost_insert(Block *b);
 
 	void print_cost_status();
-	int block_erase[16];
+	int block_erase[65536];
 
 
 private:

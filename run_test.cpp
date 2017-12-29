@@ -115,8 +115,8 @@ int main()
 		int  i = 0;
 		for (i = 0; i < number; i++)
 		{	
-			srand(time(NULL));
-			int r = rand()%(PLANE_SIZE * BLOCK_SIZE);
+			srand(1);
+			int r = random()%(SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE * BLOCK_SIZE)/2;
 			//printf("\nlogical_address: %d\n", r);
 			/* event_arrive(event_type, logical_address, size, start_time) */
 			result = ssd -> event_arrive(WRITE, r, 1, (double) 1800+(300*i));
@@ -130,7 +130,7 @@ int main()
 	//ssd->print_statistics();
 	//printf("\nprint ftl cost status\n");
 	//ssd->print_ftl_cost_status();
-	Block_manager::instance()->print_cost_status();
+	//Block_manager::instance()->print_cost_status();
 
 	getchar();
 	}
