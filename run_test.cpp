@@ -130,7 +130,7 @@ int main()
 	//ssd->print_statistics();
 	//printf("\nprint ftl cost status\n");
 	//ssd->print_ftl_cost_status();
-	//Block_manager::instance()->print_cost_status();
+	Block_manager::instance()->print_cost_status();
 
 	getchar();
 	}

@@ -221,26 +221,28 @@ void Block_manager::insert_events(Event &event)
 		erase = false;
 		//printf("%d - %d - %d - %d - %d\n", current_writing_block, (*it)->physical_address, (*it)->get_pages_invalid(), (*it)->get_pages_valid(), block_erase[(*it)->get_physical_address()/BLOCK_SIZE]);
 		if (current_writing_block != (*it)->physical_address) {
-			
-			if(num_to_erase > 0 && (*it)->get_pages_invalid() == BLOCK_SIZE && (*it)->get_pages_valid() == BLOCK_SIZE && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] <= UpperB /* && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] >= LowerB*/) {
-				//All pages is invalid and  block_erase < UpperB 
+			if(num_to_erase > 0 && (*it)->get_pages_invalid() == BLOCK_SIZE && (*it)->get_pages_valid() == BLOCK_SIZE && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] <= UpperB  && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] >= LowerB) {
+				//All pages is invalid and LowerB < block_erase < UpperB 
 				erase = true;
 				num_to_erase--;
-			} else if((*it)->get_pages_valid() > 0 && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] < LowerB && ((float)(*it)->get_pages_invalid()/BLOCK_SIZE) > 0.5) {
-				// block_erase < LowerB && block not empty &&invalid > 50%
-				erase = true;
-				num_to_erase--;
-			} else if(block_erase[(*it)->get_physical_address()/BLOCK_SIZE] <= criticalLowerB) {
-				// block_erase < LowerB && block not empty
-				erase = true;
-				num_to_erase--;
-				
+			} else if((*it)->get_pages_valid() > 0 && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] < LowerB) {
+				// block_erase < LowerB && block not empty 
+				int be = block_erase[(*it)->get_physical_address()/BLOCK_SIZE];
+				float m = ((criticalLowerB - LowerB) != 0) ? (0.5 / (LowerB - criticalLowerB)) : 1;
+				float partialRatio = m * (be - criticalLowerB);
+				partialRatio = partialRatio < 0 ? 0 : partialRatio;
+				// partialRatio = validPages / blockSize
+				//printf("\n****\npartialRatio: %f be: %d criticalLowerB: %f LowerB: %f m: %f invalid/blockSize: %f \n", partialRatio, be, criticalLowerB, LowerB, m, ((float)((*it)->get_pages_invalid())/BLOCK_SIZE));
+				if(((float)((*it)->get_pages_invalid())/BLOCK_SIZE) >= partialRatio) {
+					erase = true;
+					num_to_erase--;
+				}
 			} else if(ratio1 >= 0.75) { //full blocks > 75%
 				
-				float partialRatio = (-1.7 * ratio1) + 2;
+				float partialRatio = (-1.7 * ratio1) + 2; // invalidPages / blockSize
 
 				float freeBlocks = total - (ratio1 * total);
-				printf("ratio1: %f partialRatio: %f freeBlocks: %f\n",ratio1, partialRatio,freeBlocks);
+				//printf("ratio1: %f partialRatio: %f freeBlocks: %f\n",ratio1, partialRatio,freeBlocks);
 				int freePages = (freeBlocks * BLOCK_SIZE) - 1;
 				if(freePages > 0 && ((float)(*it)->get_pages_invalid()/BLOCK_SIZE) >= partialRatio && (*it)->get_pages_valid() == BLOCK_SIZE) {
 					//free pages of block >= partialRatio && and block is full
