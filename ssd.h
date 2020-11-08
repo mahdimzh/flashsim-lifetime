@@ -678,6 +678,7 @@ public:
 	void invalidate(Address address, block_type btype);
 	void print_statistics();
 	void insert_events(Event &event);
+	void writeToFile();
 	void promote_block(block_type to_type);
 	bool is_log_full();
 	void erase_and_invalidate(Event &event, Address &address, block_type btype);
@@ -696,7 +697,10 @@ public:
 
 	void print_cost_status();
 	int block_erase[65536];
-
+	int fileLog;
+	int extraWriteWhenMigration;
+	int totalErase;
+	int totalEraseWithMigration;
 
 private:
 	void get_page_block(Address &address, Event &event);

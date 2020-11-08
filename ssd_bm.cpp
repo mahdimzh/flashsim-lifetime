@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <queue>
 #include "ssd.h"
+#include <cmath>
+ #include <iostream>
 
 using namespace ssd;
 
@@ -40,16 +42,35 @@ Block_manager::Block_manager(FtlParent *ftl) : ftl(ftl)
 
 	data_active = 0;
 	log_active = 0;
+	srand((unsigned)time(0));
 	// printf("%d\n", SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE * BLOCK_SIZE);
 	for (int i = 0; i < SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE; ++i)
 	{
-		 block_erase[i] = 0;
+		
+		int r;
+		if (i < 3)
+			r = random()%(100-50 + 1) + 50;
+		else 
+			r = random()%50;
+		block_erase[i] = 0;
 	}
 	
 
 	current_writing_block = -2;
 
 	out_of_blocks = false;
+
+	fileLog = 0;
+	extraWriteWhenMigration = 0;
+	totalErase = 0;
+	totalEraseWithMigration = 0;
+	FILE *logFile = NULL;
+	if ((logFile = fopen("output.csv", "w")) == NULL)
+	{
+		printf("Output file cannot be written to.\n");
+		exit(-1);
+	}
+	fclose(logFile);
 
 	active_cost.reserve(NUMBER_OF_ADDRESSABLE_BLOCKS);
 }
@@ -148,6 +169,24 @@ void Block_manager::print_statistics()
 	printf("Invalid blocks: %lu\n", invalid_list.size());
 	printf("Free2 blocks: %lu\n", (unsigned long int)invalid_list.size() + (unsigned long int)log_active + (unsigned long int)data_active - (unsigned long int)free_list.size());
 	printf("-----------------\n");
+		float sum = 0;
+	float min = block_erase[0];
+	float Max = block_erase[0];
+		for (int i = 0; i < SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE; ++i)
+	{
+		//printf("%d  -  ", block_erase[i]);
+		sum += block_erase[i];
+		if (block_erase[i] > Max)
+			Max = block_erase[i];
+		if (block_erase[i] < min)
+			min = block_erase[i];
+		
+	}
+	
+
+
+	float totalAverage = sum / (SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE);
+	std::cout<< "totalAverage" << totalAverage << "\n";
 
 
 }
@@ -194,24 +233,38 @@ void Block_manager::insert_events(Event &event)
 		if (block_erase[i] < min)
 			min = block_erase[i];
 		
-	} 
+	}
+
+
 	float partialAverage 			= (Max + min) / 2;
 	float partialSubtractAverage 	= (Max - min) / 2;
 	float totalAverage = sum / (SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE);
 	float UpperB = totalAverage + partialSubtractAverage;
 	float LowerB = totalAverage - partialSubtractAverage;
 	float criticalLowerB = (totalAverage - partialAverage) > 0 ? (totalAverage - partialAverage) : 0;
-	printf("\n\npartialAverage: %f partialSubtractAverage: %f (Max: %f - min: %f)totalAverage %f\n", partialAverage,partialSubtractAverage, Max, min, totalAverage);
-	printf("UpperB %f LowerB %f, criticalLowerB %f", UpperB, LowerB, criticalLowerB);
+	
+	float standardDeviation = 0;
+	for (int i = 0; i < SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE; ++i)
+ 		standardDeviation += pow(block_erase[i] - totalAverage, 2);
+ 	standardDeviation = sqrt(standardDeviation/SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE);
 
 
-	printf("\ninvalid_list: %li, log_active: %li, full block: %li, free_list: %li\n", (int)invalid_list.size(), (int)log_active, (int)data_active, (int)free_list.size());
-	printf("used: %f, total: %f, ratio: %f ratio1: %f\n", used, total, ratio, ratio1);
+	//printf("\n\npartialAverage: %f partialSubtractAverage: %f (Max: %f - min: %f)totalAverage %f\n", partialAverage,partialSubtractAverage, Max, min, totalAverage);
+	//printf("UpperB %f LowerB %f, criticalLowerB %f", UpperB, LowerB, criticalLowerB);
+
+
+	//printf("\ninvalid_list: %li, log_active: %li, full block: %li, free_list: %li\n", (int)invalid_list.size(), (int)log_active, (int)data_active, (int)free_list.size());
+	//printf("used: %f, total: %f, ratio: %f ratio1: %f\n", used, total, ratio, ratio1);
 	
 	int free_blocks = (max_blocks - (simpleCurrentFree/BLOCK_SIZE)) + free_list.size();
 	float check = (float) free_blocks / NUMBER_OF_ADDRESSABLE_BLOCKS;
 	uint num_to_erase = PLANE_SIZE * 0.5; 
 	int counter = PLANE_SIZE; 
+
+	float freeBlocks = total - (ratio1 * total);
+	//printf("ratio1: %f partialRatio: %f freeBlocks: %f\n",ratio1, partialRatio,freeBlocks);
+	int freePages = (freeBlocks * BLOCK_SIZE) - 1;
+
 
 	ActiveByCost::iterator it = active_cost.get<1>().end();
 	--it;
@@ -220,12 +273,13 @@ void Block_manager::insert_events(Event &event)
 	while (*it) {
 		erase = false;
 		//printf("%d - %d - %d - %d - %d\n", current_writing_block, (*it)->physical_address, (*it)->get_pages_invalid(), (*it)->get_pages_valid(), block_erase[(*it)->get_physical_address()/BLOCK_SIZE]);
-		if (current_writing_block != (*it)->physical_address) {
+		if (current_writing_block != (*it)->physical_address) { //GC
 			if(num_to_erase > 0 && (*it)->get_pages_invalid() == BLOCK_SIZE && (*it)->get_pages_valid() == BLOCK_SIZE && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] <= UpperB  && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] >= LowerB) {
 				//All pages is invalid and LowerB < block_erase < UpperB 
 				erase = true;
 				num_to_erase--;
 			} else if((*it)->get_pages_valid() > 0 && block_erase[(*it)->get_physical_address()/BLOCK_SIZE] < LowerB) {
+				//WL
 				// block_erase < LowerB && block not empty 
 				int be = block_erase[(*it)->get_physical_address()/BLOCK_SIZE];
 				float m = ((criticalLowerB - LowerB) != 0) ? (0.5 / (LowerB - criticalLowerB)) : 1;
@@ -237,22 +291,26 @@ void Block_manager::insert_events(Event &event)
 					erase = true;
 					num_to_erase--;
 				}
-			} else if(ratio1 >= 0.75) { //full blocks > 75%
+			} else if(ratio1 >= 0.75) { //full blocks > 75% // Garbage Collection
 				
 				float partialRatio = (-1.7 * ratio1) + 2; // invalidPages / blockSize
 
-				float freeBlocks = total - (ratio1 * total);
-				//printf("ratio1: %f partialRatio: %f freeBlocks: %f\n",ratio1, partialRatio,freeBlocks);
-				int freePages = (freeBlocks * BLOCK_SIZE) - 1;
 				if(freePages > 0 && ((float)(*it)->get_pages_invalid()/BLOCK_SIZE) >= partialRatio && (*it)->get_pages_valid() == BLOCK_SIZE) {
 					//free pages of block >= partialRatio && and block is full
 					erase = true;
 					num_to_erase--;
+					freePages--;
 				}
 
 			}
 		}
 		if(erase) {
+			extraWriteWhenMigration += (BLOCK_SIZE - (*it)->get_pages_invalid());
+			totalErase++;
+			if((BLOCK_SIZE - (*it)->get_pages_invalid()) > 0){
+				totalEraseWithMigration++;
+			}
+
 			Block *blockErase = (*it);
 			// Let the FTL handle cleanup of the block.
 			ftl->cleanup_block(event, blockErase);
@@ -274,6 +332,79 @@ void Block_manager::insert_events(Event &event)
 			--it;
 		}		
 	}
+
+	/*FILE *logFile = NULL;
+	if ((logFile = fopen("output.csv", "a+")) == NULL)
+	{
+		printf("Output file cannot be written to.\n");
+		exit(-1);
+	}
+	
+	fprintf(logFile, "%d;%f;%f;%f;%f;%f;%f;%f;%f;%f\n",(fileLog*BLOCK_SIZE), criticalLowerB,LowerB, UpperB, totalAverage, partialAverage, partialSubtractAverage, Max, min, standardDeviation);
+	fclose(logFile);
+	fileLog++;
+	/*
+	1- number of writes
+	2- criticalLowerB
+	3- LowerB
+	4- UpperB
+	5- totalAverage
+	6- partialAverage
+	7- partialSubtractAverage
+	8- Max
+	9- min
+	10- standardDeviation
+	*/
+	//print_cost_status();
+}
+
+void Block_manager::writeToFile()
+{
+	printf("\n***************\nextraWriteWhenMigration : %d\n totalErase: %d\n totalEraseWithMigration: %d\n", extraWriteWhenMigration, totalErase, totalEraseWithMigration);
+
+	if(fileLog % BLOCK_SIZE){
+		fileLog++;
+		return;
+	}
+	float sum = 0;
+	float min = block_erase[0];
+	float Max = block_erase[0];
+
+	for (int i = 0; i < SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE; ++i)
+	{
+		//printf("%d  -  ", block_erase[i]);
+		sum += block_erase[i];
+		if (block_erase[i] > Max)
+			Max = block_erase[i];
+		if (block_erase[i] < min)
+			min = block_erase[i];
+		
+	}
+	
+
+
+	float partialAverage 			= (Max + min) / 2;
+	float partialSubtractAverage 	= (Max - min) / 2;
+	float totalAverage = sum / (SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE);
+	float UpperB = totalAverage + partialSubtractAverage;
+	float LowerB = totalAverage - partialSubtractAverage;
+	float criticalLowerB = (totalAverage - partialAverage) > 0 ? (totalAverage - partialAverage) : 0;
+	
+	float standardDeviation = 0;
+	for (int i = 0; i < SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE; ++i)
+ 		standardDeviation += pow(block_erase[i] - totalAverage, 2);
+ 	standardDeviation = sqrt(standardDeviation/(SSD_SIZE * PACKAGE_SIZE * DIE_SIZE * PLANE_SIZE));
+
+	FILE *logFile = NULL;
+	if ((logFile = fopen("output.csv", "a+")) == NULL)
+	{
+		printf("Output file cannot be written to.\n");
+		exit(-1);
+	}
+	
+	fprintf(logFile, "%d;%f;%f;%f;%f;%f;%f;%f;%f;%f\n",(fileLog), criticalLowerB,LowerB, UpperB, totalAverage, partialAverage, partialSubtractAverage, Max, min, standardDeviation);
+	fclose(logFile);
+	fileLog++;
 }
 
 Address Block_manager::get_free_block(block_type type, Event &event)
