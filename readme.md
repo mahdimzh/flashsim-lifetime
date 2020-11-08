@@ -1,18 +1,16 @@
 # Extended FlashSim
 
-This project extends FlashSim with BAST, FAST and DFTL FTLs. 
+This project extends FlashSim with new algorithm of WL and GL to increase lifetime. 
 
 Please reference if you use for your research.
 
 Bibtex
 
     @article{extendedflashsim,
-    Author = {Matias Bj{\o}rling},
+    Author = {Mahdimzh},
     Title = {Extended FlashSim},
-    Url = {https://github.com/MatiasBjorling/flashsim},
-    Year = 2011}
-
-The FTL algorihms are implemented on top of the Flash based SSD simulator implementation created by Brendan Tauras btauras, Youngjae Kim, Aayush Gupta at Pennsylvania State University.
+    Url = {https://github.com/mahdimzh/flashsim-lifetime},
+    Year = 2018}
 
 
 
